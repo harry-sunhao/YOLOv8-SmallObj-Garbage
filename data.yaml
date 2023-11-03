@@ -1,0 +1,4 @@
+{names: [Aluminium foil, Bottle cap, Bottle, Broken glass, Can, Carton, Cigarette,
+    Cup, Lid, Other litter, Other plastic, Paper, Plastic bag - wrapper, Plastic container,
+    Pop tab, Straw, Styrofoam piece, Unlabeled litter], nc: 18, test: TACO-2\test,
+  train: TACO-2\train, val: TACO-2\valid}
