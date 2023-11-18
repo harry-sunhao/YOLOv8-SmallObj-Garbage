@@ -38,7 +38,11 @@ enhancing efficiency and reducing environmental footprints.
 **Input:** An image containing various types of garbage, potentially
 with small objects.
 
+<img src="./train.jpg" alt="train" style="zoom:50%;" />
+
 **Output:** Detection labels for the garbage items in the image.
+
+<img src="./predict.jpg" alt="predict" style="zoom:50%;" />
 
 ##  Methodology
 
