@@ -162,5 +162,3 @@ cython_debug/
 # dataset
 TACO/
 datasets/
-runs/
-*.pt
