@@ -8,7 +8,7 @@ import torch
 import torch.nn as nn
 
 __all__ = ('Conv', 'Conv2', 'LightConv', 'DWConv', 'DWConvTranspose2d', 'ConvTranspose', 'Focus', 'GhostConv',
-           'ChannelAttention', 'SpatialAttention', 'CBAM', 'Concat', 'RepConv')
+           'ChannelAttention', 'SpatialAttention', 'CBAM', 'Concat','inv', 'RepConv','CBAMBottleneck')
 
 
 def autopad(k, p=None, d=1):  # kernel, padding, dilation
@@ -301,3 +301,95 @@ class Concat(nn.Module):
     def forward(self, x):
         """Forward pass for the YOLOv8 mask Proto module."""
         return torch.cat(x, self.d)
+
+class inv(nn.Module):
+
+    def __init__(self, c1, c2, kernel_size, stride):
+        super().__init__()
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.c1 = c1
+        reduction_ratio = 1
+        self.group_channels = 16
+        self.groups = self.c1 // self.group_channels
+        self.conv1 = Conv(
+            c1, c1 // reduction_ratio, 1)
+        self.conv2 = Conv(
+            c1 // reduction_ratio,
+            kernel_size ** 2 * self.groups,
+            1, 1)
+
+        if stride > 1:
+            self.avgpool = nn.AvgPool2d(stride, stride)
+        self.unfold = nn.Unfold(kernel_size, 1, (kernel_size - 1) // 2, stride)
+
+    def forward(self, x):
+        # weight = self.conv2(self.conv1(x if self.stride == 1 else self.avgpool(x)))
+        weight = self.conv2(x)
+        b, c, h, w = weight.shape
+        weight = weight.view(b, self.groups, self.kernel_size ** 2, h, w).unsqueeze(2)
+        out = self.unfold(x).view(b, self.groups, self.group_channels, self.kernel_size ** 2, h, w)
+        out = (weight * out).sum(dim=3).view(b, self.c1, h, w)
+
+        return out
+
+# ---------------------------- CBAM start ---------------------------------
+class ChannelAttention_our(nn.Module):
+    def __init__(self, in_planes, ratio=16):
+        super().__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.max_pool = nn.AdaptiveMaxPool2d(1)
+        self.f1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
+        self.relu = nn.ReLU()
+        self.f2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+
+        avg_out = self.f2(self.relu(self.f1(self.avg_pool(x))))
+
+        max_out = self.f2(self.relu(self.f1(self.max_pool(x))))
+        out = self.sigmoid(avg_out + max_out)
+        return out
+
+
+class SpatialAttention_our(nn.Module):
+    def __init__(self, kernel_size=7):
+        super().__init__()
+        assert kernel_size in (3, 7), 'kernel size must be 3 or 7'
+        padding = 3 if kernel_size == 7 else 1
+        self.conv = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
+        self.sigmoid = nn.Sigmoid()
+
+    def forward(self, x):
+
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+
+        x = torch.cat([avg_out, max_out], dim=1)
+
+        x = self.conv(x)
+        return self.sigmoid(x)
+
+
+class CBAMBottleneck(nn.Module):
+    # ch_in, ch_out, shortcut, groups, expansion, ratio, kernel_size
+    def __init__(self, c1, c2, kernel_size=3, shortcut=True, g=1, e=0.5, ratio=16):
+        super().__init__()
+        c_ = int(c2 * e)  # hidden channels
+        self.cv1 = Conv(c1, c_, 1, 1)
+        self.cv2 = Conv(c_, c2, 3, 1, g=g)
+        self.add = shortcut and c1 == c2
+
+        self.channel_attention = ChannelAttention_our(c2, ratio)
+        self.spatial_attention = SpatialAttention_our(kernel_size)
+
+    def forward(self, x):
+
+        x2 = self.cv2(self.cv1(x)) 
+
+        out = self.channel_attention(x2) * x2
+
+        out = self.spatial_attention(out) * out
+        return x + out if self.add else out
